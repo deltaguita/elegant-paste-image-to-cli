@@ -2,6 +2,8 @@
 
 Paste a clipboard image straight into your terminal and get back a real file path — automatically. Built for AI coding CLIs that can't accept raw image paste.
 
+![Demo: pasting a screenshot into Claude Code CLI, which becomes a file path](assets/demo.gif)
+
 ## The problem
 
 Terminal-based AI coding agents — Claude Code, Kiro CLI, Codex CLI, and others — can *read* an image if you give them a file path, but they can't accept a raw pasted image. Terminals themselves don't help either: `Cmd+V` only understands text, so a screenshot on your clipboard does nothing when pasted.
