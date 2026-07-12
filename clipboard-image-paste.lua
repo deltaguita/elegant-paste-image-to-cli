@@ -104,13 +104,21 @@ local lastPastedImagePath = nil
 local lastPastedChangeCount = nil
 local lastPastedAt = 0
 
-local cmdVWatcher = eventtap.new({ eventTypes.keyDown, eventTypes.tapDisabledByTimeout, eventTypes.tapDisabledByUserInput }, function(event)
-    -- macOS can silently disable an eventtap (e.g. if the callback is slow to
-    -- respond, or due to other system-level protections). When that happens,
-    -- re-enable it immediately so Cmd+V doesn't silently stop working.
+-- Forward declarations so the handler and watchdogs can rebuild the tap.
+local cmdVWatcher   -- the current live eventtap object
+local rebuildTap    -- (re)creates a brand-new eventtap and starts it
+
+local function handleCmdVEvent(event)
+    -- macOS can silently disable an eventtap (slow callback, sleep/idle, or
+    -- other system-level protections). CRITICAL: calling :start() on the SAME
+    -- disabled tap object does NOT reliably revive it — macOS generally needs a
+    -- brand-new eventtap object (verified: a freshly created tap intercepts
+    -- Cmd+V again while the old one stays dead, with no sleep in between). So on
+    -- a disable event we schedule a full rebuild, deferred to run outside this
+    -- callback, rather than restarting the dead object.
     local eventType = event:getType()
     if eventType == eventTypes.tapDisabledByTimeout or eventType == eventTypes.tapDisabledByUserInput then
-        cmdVWatcher:start()
+        hs.timer.doAfter(0, rebuildTap)
         return false
     end
 
@@ -168,47 +176,61 @@ local cmdVWatcher = eventtap.new({ eventTypes.keyDown, eventTypes.tapDisabledByT
     end
 
     return true -- consume the original Cmd+V, don't let the system process it again
-end)
+end
 
-cmdVWatcher:start()
+-- Factory: build a fresh eventtap wired to the handler above.
+local function buildTap()
+    return eventtap.new({ eventTypes.keyDown, eventTypes.tapDisabledByTimeout, eventTypes.tapDisabledByUserInput }, handleCmdVEvent)
+end
 
--- =================================================
--- Watchdog: actively poll eventtap health
--- =================================================
--- The tapDisabledByTimeout/tapDisabledByUserInput event listener above is
--- the documented way to detect a disabled eventtap, but in practice the tap
--- can still end up stopped without that event firing reliably (e.g. after
--- system sleep/wake or other session interruptions). This timer is a
--- belt-and-suspenders check.
---
--- IMPORTANT: after sleep/idle, macOS can leave the eventtap effectively dead
--- while isEnabled() still reports true. Trusting isEnabled() therefore misses
--- exactly the failure mode we care about (works at first, silently stops
--- after being idle for a while). So we unconditionally cycle stop()+start():
--- restarting an already-healthy tap is cheap and harmless, and it guarantees
--- recovery even when isEnabled() lies.
-hs.timer.doEvery(10, function()
-    cmdVWatcher:stop()
+-- Recreate the tap from scratch. Stopping + dropping the old object and
+-- creating a NEW hs.eventtap is the only thing that reliably brings paste back
+-- once macOS has killed the original tap; :start() on the dead object is not
+-- enough. The old object is stopped and dereferenced (garbage collected).
+rebuildTap = function()
+    if cmdVWatcher then cmdVWatcher:stop() end
+    cmdVWatcher = buildTap()
     cmdVWatcher:start()
-end)
+end
+
+rebuildTap()
 
 -- =================================================
--- Sleep/wake watchdog (the real fix for "stops working after idle")
+-- Watchdog: unconditional periodic rebuild
 -- =================================================
--- The polling timer above cannot fire while the system is asleep, and on wake
--- it may not resume cleanly. More importantly, the eventtap itself is the
--- thing macOS tends to kill across display sleep, system sleep, screen lock,
--- and fast user switching. hs.caffeinate.watcher lets us react to those exact
--- transitions and force a fresh stop()+start() the moment the session comes
--- back, instead of waiting (possibly forever) for a polling tick.
+-- Earlier attempts that only restarted (stop()+start()) the same object, or
+-- that gated recovery on isEnabled(), FAILED: macOS can leave the tap dead
+-- while isEnabled() still returns true, and restarting a dead object doesn't
+-- revive it. Since a full rebuild is cheap and is the only thing proven to
+-- work, just rebuild unconditionally on a short interval. The sub-millisecond
+-- gap during a rebuild is harmless — a keystroke landing in that window simply
+-- pastes natively.
+hs.timer.doEvery(10, rebuildTap)
+
+-- =================================================
+-- Rebuild on wake / unlock
+-- =================================================
+-- Sleep, display sleep, screen lock and fast user switching are prime moments
+-- for macOS to kill the tap, and timers don't fire while asleep. Rebuild the
+-- moment the session comes back instead of waiting for the next poll tick.
 local caffeinateEvents = hs.caffeinate.watcher
 local wakeWatcher = caffeinateEvents.new(function(eventType)
     if eventType == caffeinateEvents.systemDidWake
         or eventType == caffeinateEvents.screensDidWake
         or eventType == caffeinateEvents.screensDidUnlock
         or eventType == caffeinateEvents.sessionDidBecomeActive then
-        cmdVWatcher:stop()
-        cmdVWatcher:start()
+        rebuildTap()
     end
 end)
 wakeWatcher:start()
+
+-- =================================================
+-- Diagnostics hook (avoids the local-scope debugging wall)
+-- =================================================
+-- Exposed so state can be inspected/repaired from the Hammerspoon Console:
+--   ClipboardImagePaste.isEnabled()  -- does the tap currently report live?
+--   ClipboardImagePaste.rebuild()    -- force a fresh tap right now
+_G.ClipboardImagePaste = {
+    rebuild = function() rebuildTap() end,
+    isEnabled = function() return cmdVWatcher ~= nil and cmdVWatcher:isEnabled() end,
+}
