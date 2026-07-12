@@ -24,6 +24,7 @@ One keystroke. No manual save step, no typing paths by hand.
 - No extra dependencies — pure Hammerspoon, no `pngpaste` needed
 - Collision-safe filenames (timestamp + UUID)
 - Guided permission setup — auto-opens System Settings to the Accessibility page on first run if needed
+- Self-healing — macOS can silently disable the keyboard listener (e.g. after sleep/wake); a background health check detects and restarts it automatically
 - Temp-only by design — files go to `/tmp`, which macOS clears on reboot. This is intentional: this tool is for quickly handing a screenshot to a CLI, not for archiving images. Use your normal screenshot-to-file workflow for anything you want to keep
 
 ## Install

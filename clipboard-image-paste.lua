@@ -7,8 +7,8 @@
 --     into the terminal (useful for CLI tools that accept image file paths,
 --     e.g. Claude Code / Codex CLI and other AI coding agents)
 --   - If the clipboard contains text/other -> paste normally, unaffected
---   - If the focused app is not the configured terminal -> do nothing,
---     native behavior is untouched
+--   - If the focused app is not in the configured terminal list -> do
+--     nothing, native behavior is untouched
 --
 -- Core logic adapted from:
 --   https://eshlox.net/clipboard-image-to-file-hammerspoon
@@ -19,7 +19,7 @@
 -- Differences from the original:
 --   - Saves to a fixed temp directory (default /tmp) instead of relying
 --     on the current tmux pane directory
---   - Only active in the configured terminal app, other apps are untouched
+--   - Only active in the configured terminal app(s), other apps are untouched
 --   - Types the full path directly, no need to paste a second time
 --   - Uses hs.eventtap instead of hs.hotkey.bind to intercept the keystroke,
 --     so non-image paste can properly pass through to the system
@@ -27,7 +27,9 @@
 --     event gets re-captured by the same binding, breaking text paste)
 --   - Debounces repeated Cmd+V presses for the same clipboard image so
 --     accidental double-presses don't create duplicate files
---   - Self-heals if macOS silently disables the eventtap
+--   - Self-heals if macOS silently disables the eventtap (both via the
+--     documented disabled-event listener, and a periodic health-check
+--     timer as a backup)
 
 -- =================================================
 -- Configuration
@@ -84,8 +86,12 @@ local function showToast(message, isError)
 end
 
 -- =================================================
--- Intercept Cmd+V via eventtap
+-- Intercept Cmd+V via eventtap (not hs.hotkey.bind)
 -- =================================================
+-- Why: hs.hotkey.bind always consumes the keystroke once bound and cannot pass
+-- events through — even a synthesized Cmd+V event sent from inside the
+-- callback gets re-captured by the same binding, breaking text paste.
+-- hs.eventtap's callback can return false to let the event propagate normally.
 local eventtap = hs.eventtap
 local eventTypes = eventtap.event.types
 local keyCodes = hs.keycodes.map
@@ -113,11 +119,11 @@ local cmdVWatcher = eventtap.new({ eventTypes.keyDown, eventTypes.tapDisabledByT
 
     -- Only handle plain Cmd+V (exclude combos like Cmd+Shift+V)
     if keyCode ~= keyCodes["v"] or not flags.cmd or flags.shift or flags.alt or flags.ctrl then
-        return false
+        return false -- not our combo, let it through
     end
 
     if not isTargetAppFocused() then
-        return false -- not the target app, let the system handle it
+        return false -- not a target app, let the system handle it
     end
 
     local img = hs.pasteboard.readImage()
@@ -154,3 +160,18 @@ local cmdVWatcher = eventtap.new({ eventTypes.keyDown, eventTypes.tapDisabledByT
 end)
 
 cmdVWatcher:start()
+
+-- =================================================
+-- Watchdog: actively poll eventtap health
+-- =================================================
+-- The tapDisabledByTimeout/tapDisabledByUserInput event listener above is
+-- the documented way to detect a disabled eventtap, but in practice the tap
+-- can still end up stopped without that event firing reliably (e.g. after
+-- system sleep/wake or other session interruptions). This timer is a
+-- belt-and-suspenders check: poll isEnabled() periodically and restart it
+-- if it's ever found to be off.
+hs.timer.doEvery(10, function()
+    if not cmdVWatcher:isEnabled() then
+        cmdVWatcher:start()
+    end
+end)
