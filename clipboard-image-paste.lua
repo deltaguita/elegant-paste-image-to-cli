@@ -131,6 +131,17 @@ local cmdVWatcher = eventtap.new({ eventTypes.keyDown, eventTypes.tapDisabledByT
         return false -- clipboard is not an image, let native text paste happen
     end
 
+    -- If the clipboard also contains a file reference (e.g. you copied a
+    -- file in Finder, which puts both a file URL AND an image thumbnail on
+    -- the pasteboard for image files), this is a "copy file" action, not a
+    -- screenshot. Don't hijack it — let the system paste the file/path natively.
+    local pasteboardTypes = hs.pasteboard.contentTypes() or {}
+    for _, t in ipairs(pasteboardTypes) do
+        if t == "public.file-url" then
+            return false
+        end
+    end
+
     -- Same clipboard image, pasted again within the debounce window ->
     -- re-type the previously saved path instead of creating a new file.
     local imageChangeCount = hs.pasteboard.changeCount()

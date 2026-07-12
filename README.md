@@ -25,6 +25,7 @@ One keystroke. No manual save step, no typing paths by hand.
 - Collision-safe filenames (timestamp + UUID)
 - Guided permission setup — auto-opens System Settings to the Accessibility page on first run if needed
 - Self-healing — macOS can silently disable the keyboard listener (e.g. after sleep/wake); a background health check detects and restarts it automatically
+- Doesn't hijack copied files — if you copy an image *file* in Finder (which also puts an image thumbnail on the clipboard), this tool detects the accompanying file reference and lets the paste happen natively instead of creating a duplicate file
 - Temp-only by design — files go to `/tmp`, which macOS clears on reboot. This is intentional: this tool is for quickly handing a screenshot to a CLI, not for archiving images. Use your normal screenshot-to-file workflow for anything you want to keep
 
 ## Install
