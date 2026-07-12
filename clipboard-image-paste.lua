@@ -179,10 +179,36 @@ cmdVWatcher:start()
 -- the documented way to detect a disabled eventtap, but in practice the tap
 -- can still end up stopped without that event firing reliably (e.g. after
 -- system sleep/wake or other session interruptions). This timer is a
--- belt-and-suspenders check: poll isEnabled() periodically and restart it
--- if it's ever found to be off.
+-- belt-and-suspenders check.
+--
+-- IMPORTANT: after sleep/idle, macOS can leave the eventtap effectively dead
+-- while isEnabled() still reports true. Trusting isEnabled() therefore misses
+-- exactly the failure mode we care about (works at first, silently stops
+-- after being idle for a while). So we unconditionally cycle stop()+start():
+-- restarting an already-healthy tap is cheap and harmless, and it guarantees
+-- recovery even when isEnabled() lies.
 hs.timer.doEvery(10, function()
-    if not cmdVWatcher:isEnabled() then
+    cmdVWatcher:stop()
+    cmdVWatcher:start()
+end)
+
+-- =================================================
+-- Sleep/wake watchdog (the real fix for "stops working after idle")
+-- =================================================
+-- The polling timer above cannot fire while the system is asleep, and on wake
+-- it may not resume cleanly. More importantly, the eventtap itself is the
+-- thing macOS tends to kill across display sleep, system sleep, screen lock,
+-- and fast user switching. hs.caffeinate.watcher lets us react to those exact
+-- transitions and force a fresh stop()+start() the moment the session comes
+-- back, instead of waiting (possibly forever) for a polling tick.
+local caffeinateEvents = hs.caffeinate.watcher
+local wakeWatcher = caffeinateEvents.new(function(eventType)
+    if eventType == caffeinateEvents.systemDidWake
+        or eventType == caffeinateEvents.screensDidWake
+        or eventType == caffeinateEvents.screensDidUnlock
+        or eventType == caffeinateEvents.sessionDidBecomeActive then
+        cmdVWatcher:stop()
         cmdVWatcher:start()
     end
 end)
+wakeWatcher:start()
