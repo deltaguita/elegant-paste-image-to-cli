@@ -86,6 +86,32 @@ local function showToast(message, isError)
 end
 
 -- =================================================
+-- Type a path into the focused app, robustly
+-- =================================================
+-- Cmd+V fires the handler while the user is still physically holding Cmd. If
+-- we type immediately, the first character (the leading "/") gets swallowed —
+-- it collides with the still-held Cmd modifier (treated as a Cmd shortcut), so
+-- the path arrives as "tmp/..." instead of "/tmp/...". Wait for Cmd to be
+-- released (poll briefly, with a hard cap) before typing. This touches only
+-- the keyboard, never the clipboard.
+local function typePathSafely(path)
+    local function fire() hs.eventtap.keyStrokes(path) end
+    if not hs.eventtap.checkKeyboardModifiers().cmd then
+        fire()
+        return
+    end
+    local tries = 0
+    local poll
+    poll = hs.timer.doEvery(0.02, function()
+        tries = tries + 1
+        if (not hs.eventtap.checkKeyboardModifiers().cmd) or tries >= 50 then
+            poll:stop()
+            hs.timer.doAfter(0.01, fire) -- tiny settle so the first char lands
+        end
+    end)
+end
+
+-- =================================================
 -- Intercept Cmd+V via eventtap (not hs.hotkey.bind)
 -- =================================================
 -- Why: hs.hotkey.bind always consumes the keystroke once bound and cannot pass
@@ -155,7 +181,7 @@ local function handleCmdVEvent(event)
     local imageChangeCount = hs.pasteboard.changeCount()
     local now = hs.timer.secondsSinceEpoch()
     if lastPastedImagePath and lastPastedChangeCount == imageChangeCount and (now - lastPastedAt) < DEBOUNCE_SECONDS then
-        hs.eventtap.keyStrokes(lastPastedImagePath)
+        typePathSafely(lastPastedImagePath)
         lastPastedAt = now
         return true
     end
@@ -166,7 +192,7 @@ local function handleCmdVEvent(event)
 
     local ok = img:saveToFile(path)
     if ok then
-        hs.eventtap.keyStrokes(path)
+        typePathSafely(path)
         showToast("Saved & pasted path: " .. filename, false)
         lastPastedImagePath = path
         lastPastedChangeCount = imageChangeCount
